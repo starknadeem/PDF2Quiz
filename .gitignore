@@ -2,4 +2,6 @@
 __pycache__/
 credentials.json
 token.json
+.env
+mcqs.pdf
 *.pyc

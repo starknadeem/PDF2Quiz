@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import os
-from typing import Iterable, List, Optional, Sequence, Tuple
+import re
+from typing import Iterable, List, Tuple
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+from auth import GoogleAuthError, get_oauth_credentials
 
 
 class GoogleFormsError(Exception):
@@ -19,48 +18,9 @@ FORMS_SCOPES: Tuple[str, ...] = (
 )
 
 
-def get_oauth_credentials(
-    *,
-    scopes: Sequence[str],
-    credentials_path: str = "credentials.json",
-    token_path: str = "token.json",
-) -> Credentials:
-    """
-    Loads cached user credentials from token_path or runs an OAuth browser flow.
-
-    - credentials_path: OAuth client JSON downloaded from Google Cloud Console
-    - token_path: cached user tokens created after first run
-    """
-    creds: Optional[Credentials] = None
-
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, scopes=list(scopes))
-
-    if creds and creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(Request())
-        except Exception as e:
-            raise GoogleFormsError(f"Failed to refresh OAuth token: {e}") from e
-
-    if not creds or not creds.valid:
-        if not os.path.exists(credentials_path):
-            raise GoogleFormsError(
-                f"Missing OAuth client file: {credentials_path}. "
-                "Create OAuth credentials and download the JSON."
-            )
-        try:
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes=list(scopes))
-            creds = flow.run_local_server(port=0)
-        except Exception as e:
-            raise GoogleFormsError(f"OAuth login failed: {e}") from e
-
-        try:
-            with open(token_path, "w", encoding="utf-8") as f:
-                f.write(creds.to_json())
-        except Exception as e:
-            raise GoogleFormsError(f"Failed to write token file: {token_path}: {e}") from e
-
-    return creds
+def _single_line(s: str) -> str:
+    """Collapse newlines and extra spaces so Google Forms API accepts the text."""
+    return " ".join((s or "").strip().split())
 
 
 def create_quiz_form(
@@ -80,9 +40,12 @@ def create_quiz_form(
       - answer (str | None)
       - explanation (str | None)
     """
-    creds = get_oauth_credentials(
-        scopes=FORMS_SCOPES, credentials_path=credentials_path, token_path=token_path
-    )
+    try:
+        creds = get_oauth_credentials(
+            scopes=FORMS_SCOPES, credentials_path=credentials_path, token_path=token_path
+        )
+    except GoogleAuthError as e:
+        raise GoogleFormsError(str(e)) from e
 
     try:
         service = build("forms", "v1", credentials=creds, cache_discovery=False)
@@ -106,8 +69,8 @@ def create_quiz_form(
         # Add items
         index = 0
         for mcq in mcqs:
-            q_text = f'{mcq["number"]}. {mcq["question"]}'.strip()
-            options = mcq["options"]
+            q_text = _single_line(f'{mcq["number"]}. {mcq["question"]}')
+            options = [_single_line(opt) for opt in mcq["options"]]
             answer = (mcq.get("answer") or "").strip()
             explanation = (mcq.get("explanation") or "").strip()
 
@@ -117,9 +80,7 @@ def create_quiz_form(
             correct_value = None
             if answer:
                 # Accept answer as a letter (A/B/C/...) or as exact option text.
-                import re as _re
-
-                m = _re.match(r"^\s*\(?\s*([A-Ha-h])\s*\)?\s*[\.\)]?\s*$", answer)
+                m = re.match(r"^\s*\(?\s*([A-Ha-h])\s*\)?\s*[\.\)]?\s*$", answer)
                 if m:
                     idx = ord(m.group(1).upper()) - ord("A")
                     if 0 <= idx < len(options):
@@ -141,17 +102,17 @@ def create_quiz_form(
             }
 
             if correct_value:
+                when_right = _single_line(explanation if explanation else "Correct.")
+                when_wrong = (
+                    f"Correct answer: {correct_value}. {_single_line(explanation)}"
+                    if explanation
+                    else f"Correct answer: {correct_value}"
+                )
                 question_obj["grading"] = {
                     "pointValue": 1,
                     "correctAnswers": {"answers": [{"value": correct_value}]},
-                    "whenRight": {"text": explanation if explanation else "Correct."},
-                    "whenWrong": {
-                        "text": (
-                            f"Correct answer: {correct_value}\n\n{explanation}"
-                            if explanation
-                            else f"Correct answer: {correct_value}"
-                        )
-                    },
+                    "whenRight": {"text": when_right},
+                    "whenWrong": {"text": when_wrong},
                 }
 
             requests.append(

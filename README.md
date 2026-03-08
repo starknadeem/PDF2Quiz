@@ -15,7 +15,13 @@ project/
   pdf_parser.py
   form_creator.py
   classroom_uploader.py
+  auth.py
   requirements.txt
+  requirements-dev.txt
+  tests/
+    test_pdf_parser.py
+    test_form_creator.py
+    test_generate_quiz.py
   README.md
 ```
 
@@ -27,6 +33,13 @@ Create a virtual environment and install dependencies:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+To run tests (optional; install dev dependencies first):
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
 ```
 
 ## Google API setup (OAuth)
@@ -65,6 +78,34 @@ python3 generate_quiz.py \
   --pdf mcqs.pdf --page 5 --start 21 --end 30 --title "Quiz 1" \
   --classroom_id "123456789012"
 ```
+
+Preview parsed MCQs without creating a form or calling Google APIs:
+
+```bash
+python3 generate_quiz.py --pdf mcqs.pdf --page 5 --start 21 --end 30 --title "Quiz 1" --preview
+```
+
+**Config file:** You can put options in a YAML file and pass `--config quiz_config.yaml`. CLI arguments override config values. Example `quiz_config.yaml`:
+
+```yaml
+pdf: mcqs.pdf
+page: 5
+start: 21
+end: 30
+title: "Quiz 1"
+classroom_id: "123456789012"
+credentials: credentials.json
+token: token.json
+due_date: "2025-03-15"
+points: 10
+draft: false
+```
+
+Then run: `python3 generate_quiz.py --config quiz_config.yaml` (override any value with CLI, e.g. `--title "Quiz 2"`).
+
+**Classroom options:** Use `--due-date 2025-03-15`, `--points 10`, and `--draft` to set assignment due date, max points, or create as draft.
+
+**Export and ungraded questions:** Use `--output parsed.json` or `--output parsed.md` to write parsed MCQs to a file (in addition to creating the form). Use `--allow-no-answer` to include questions that have no ANSWER block in the PDF (they appear in the form as ungraded).
 
 You can also set custom OAuth file paths:
 
@@ -120,6 +161,8 @@ On success:
 If Classroom upload is used:
 
 - `Quiz assignment created successfully.`
+
+**Exit codes:** `0` = success; `1` = unexpected error; `2` = PDF or parsing error (invalid path, page, range, or format); `3` = Google API error (OAuth or Forms/Classroom). Use `--verbose` / `-v` to print which page(s) were used and parsing progress.
 
 ## Troubleshooting
 
