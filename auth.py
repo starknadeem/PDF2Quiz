@@ -3,6 +3,7 @@ Shared Google OAuth credential loading for Forms and Classroom APIs.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Optional, Sequence
@@ -17,6 +18,23 @@ _REFRESH_RETRY_DELAY_SEC = 2
 
 class GoogleAuthError(Exception):
     """Raised when OAuth credential loading or refresh fails."""
+
+
+def _token_has_required_scopes(token_path: str, scopes: Sequence[str]) -> bool:
+    """
+    Best-effort check using token.json's stored granted scopes.
+    Returns True when requested scopes are a subset of granted scopes.
+    """
+    try:
+        with open(token_path, encoding="utf-8") as f:
+            token_data = json.load(f)
+        granted = token_data.get("scopes")
+        if not isinstance(granted, list):
+            return False
+        granted_set = {str(s) for s in granted}
+        return set(scopes).issubset(granted_set)
+    except Exception:
+        return False
 
 
 def get_oauth_credentials(
@@ -34,7 +52,10 @@ def get_oauth_credentials(
     creds: Optional[Credentials] = None
 
     if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, scopes=list(scopes))
+        # If token lacks required scopes, force full OAuth consent so Google issues
+        # a token that includes all requested APIs (e.g. Forms + Classroom).
+        if _token_has_required_scopes(token_path, scopes):
+            creds = Credentials.from_authorized_user_file(token_path, scopes=list(scopes))
 
     if creds and creds.expired and creds.refresh_token:
         last_err: Optional[Exception] = None
@@ -48,7 +69,12 @@ def get_oauth_credentials(
                 if attempt < _REFRESH_RETRIES - 1:
                     time.sleep(_REFRESH_RETRY_DELAY_SEC)
         if last_err is not None:
-            raise GoogleAuthError(f"Failed to refresh OAuth token: {last_err}") from last_err
+            # Common when trying to use broader scopes with an older token.
+            # Fall back to full OAuth consent flow instead of hard-failing.
+            if "invalid_scope" in str(last_err).lower():
+                creds = None
+            else:
+                raise GoogleAuthError(f"Failed to refresh OAuth token: {last_err}") from last_err
 
     if not creds or not creds.valid:
         if not os.path.exists(credentials_path):

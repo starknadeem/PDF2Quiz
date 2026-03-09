@@ -79,6 +79,10 @@ python3 generate_quiz.py \
   --classroom_id "123456789012"
 ```
 
+`--classroom_id` accepts either:
+- numeric course ID (recommended): `123456789012`
+- Classroom URL-style base64 ID: `ODUwMTUwNDcxNDI5` (auto-decoded by the tool)
+
 Preview parsed MCQs without creating a form or calling Google APIs:
 
 ```bash

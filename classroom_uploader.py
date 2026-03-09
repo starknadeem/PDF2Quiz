@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import base64
 import re
-from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from googleapiclient.discovery import build
@@ -18,6 +18,26 @@ CLASSROOM_SCOPES: Tuple[str, ...] = (
     "https://www.googleapis.com/auth/classroom.coursework.students",
     "https://www.googleapis.com/auth/classroom.courses.readonly",
 )
+
+
+def _normalize_classroom_id(classroom_id: str) -> str:
+    """
+    Accept numeric Classroom course IDs directly.
+    Also accept base64/base64url-encoded IDs from some Classroom URLs and decode them.
+    """
+    cid = (classroom_id or "").strip()
+    if cid.isdigit():
+        return cid
+
+    try:
+        # Support missing padding and URL-safe alphabet.
+        padded = cid + "=" * (-len(cid) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8").strip()
+        if decoded.isdigit():
+            return decoded
+    except Exception:
+        pass
+    return cid
 
 
 def create_quiz_assignment_with_link(
@@ -53,14 +73,12 @@ def create_quiz_assignment_with_link(
     except GoogleAuthError as e:
         raise GoogleClassroomError(str(e)) from e
 
-    now = datetime.now(timezone.utc)
     course_work = {
         "title": title,
         "description": description or "Quiz generated from PDF MCQs.",
         "materials": [{"link": {"url": form_url, "title": "Google Form Quiz"}}],
         "workType": "ASSIGNMENT",
         "state": "DRAFT" if draft else "PUBLISHED",
-        "scheduledTime": now.isoformat(),
     }
     if max_points is not None and max_points >= 0:
         course_work["maxPoints"] = max_points
@@ -77,10 +95,11 @@ def create_quiz_assignment_with_link(
 
     try:
         service = build("classroom", "v1", credentials=creds, cache_discovery=False)
+        normalized_course_id = _normalize_classroom_id(classroom_id)
         created = (
             service.courses()
             .courseWork()
-            .create(courseId=classroom_id, body=course_work)
+            .create(courseId=normalized_course_id, body=course_work)
             .execute()
         )
         return created["id"]
