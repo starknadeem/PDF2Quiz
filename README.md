@@ -86,55 +86,55 @@ On first run, browser auth opens and `token.json` is created automatically.
 ### 1) Create form quiz from PDF
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1"
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1"
 ```
 
 ### 2) Preview only (no Google API calls)
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --preview
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --preview
 ```
 
 ### 3) Create form + Classroom assignment
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --classroom_id "123456789012"
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --classroom_id "123456789012"
 ```
 
 ### 4) Classroom assignment as draft
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --classroom_id "123456789012" --draft
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --classroom_id "123456789012" --draft
 ```
 
 ### 5) Classroom assignment with due date and points
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --classroom_id "123456789012" --due-date 2026-03-15 --points 10
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --classroom_id "123456789012" --due-date 2026-03-15 --points 10
 ```
 
 ### 6) Save parsed output to file
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --output parsed.json
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --output parsed.json
 ```
 
 or:
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --output parsed.md
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --output parsed.md
 ```
 
 ### 7) Allow ungraded questions (no ANSWER block)
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --allow-no-answer
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --allow-no-answer
 ```
 
 ### 8) Use custom credentials/token paths
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --credentials path/to/credentials.json --token path/to/token.json
+python generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --credentials path/to/credentials.json --token path/to/token.json
 ```
 
 ## Classroom ID format
@@ -180,7 +180,7 @@ output: parsed.json
 Run with:
 
 ```bash
-python3 generate_quiz.py --config quiz_config.yaml
+python generate_quiz.py --config quiz_config.yaml
 ```
 
 CLI flags override config values.
