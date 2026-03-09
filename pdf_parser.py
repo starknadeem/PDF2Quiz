@@ -73,7 +73,7 @@ _OPT_LINE_RE_2 = re.compile(r"^\s*\(\s*(?:[A-Ha-h])\s*\)\s*(.*\S)\s*$")
 _OPT_LINE_LABEL_RE = re.compile(r"^\s*([A-Ha-h])\s*[\)\.\:\-]\s*(.*\S)\s*$")
 
 _Q_START_ANYWHERE_RE = re.compile(
-    r"(?:(?<=\n)|^|\s)(?:Q\s*[-\.]?\s*)?(\d{1,5})\s*[\.\)]\s+",
+    r"(?:(?<=\n)|^|\s)(?:Q\s*[-\.]?\s*)?(\d{1,5})\s*[\.\)\:]\s*",
     re.IGNORECASE,
 )
 _OPT_ANYWHERE_RE = re.compile(r"(?:(?<=\n)|^|\s)(?:\(\s*([A-Ha-h])\s*\)|([A-Ha-h]))\s*[\)\.\:\-]\s*")
@@ -82,6 +82,27 @@ _ANSWER_RE = re.compile(r"^\s*ANSWER\s*:?\s*(.*\S)?\s*$", re.IGNORECASE)
 _EXPLANATION_RE = re.compile(r"^\s*EXPLANATION\s*:?\s*(.*\S)?\s*$", re.IGNORECASE)
 
 _WATERMARK_URL_RE = re.compile(r"(https?://\S+|t\.me/\S+)", re.IGNORECASE)
+
+# Sanity limits to reject list/table content misparsed as MCQs (e.g. ABG causes with A) B) labels)
+_MAX_QUESTION_CHARS = 1200
+_MAX_QUESTION_NEWLINES = 5  # real questions are usually 1–3 lines; lists/paragraphs have many
+_MIN_OPTIONS = 2
+_MAX_OPTIONS = 8
+_MAX_OPTION_CHARS = 500
+
+
+def _is_plausible_mcq(mcq: MCQ) -> bool:
+    """Reject MCQs that look like misparsed lists/tables (e.g. long paragraphs + many bullet options)."""
+    if len(mcq.question) > _MAX_QUESTION_CHARS:
+        return False
+    if mcq.question.count("\n") > _MAX_QUESTION_NEWLINES:
+        return False
+    if not (_MIN_OPTIONS <= len(mcq.options) <= _MAX_OPTIONS):
+        return False
+    for opt in mcq.options:
+        if len(opt) > _MAX_OPTION_CHARS:
+            return False
+    return True
 
 
 def _normalize_ws(s: str) -> str:
@@ -109,7 +130,35 @@ def _clean_footer_lines(lines: List[str]) -> List[str]:
     return cleaned
 
 
-def parse_mcqs_from_text(text: str, start: int, end: int) -> List[MCQ]:
+def _merge_mcq_lists(line_based: List[MCQ], token_based: List[MCQ]) -> List[MCQ]:
+    """
+    Merge results from line-based and token-based parsers. For each question number,
+    prefer the MCQ that has an answer; if both or neither, prefer more options / longer text.
+    """
+    by_num: Dict[int, MCQ] = {}
+    for m in line_based:
+        by_num[m.number] = m
+    for m in token_based:
+        existing = by_num.get(m.number)
+        if existing is None:
+            by_num[m.number] = m
+        else:
+            # Prefer the one with answer; then more options; then longer question
+            if m.answer and not existing.answer:
+                by_num[m.number] = m
+            elif existing.answer and not m.answer:
+                pass
+            elif len(m.options) > len(existing.options) or (
+                len(m.options) == len(existing.options)
+                and len(m.question) > len(existing.question)
+            ):
+                by_num[m.number] = m
+    return [by_num[k] for k in sorted(by_num.keys())]
+
+
+def parse_mcqs_from_text(
+    text: str, start: int, end: int, *, allow_no_answer: bool = False
+) -> List[MCQ]:
     """
     Parse MCQs from extracted text.
 
@@ -119,26 +168,42 @@ def parse_mcqs_from_text(text: str, start: int, end: int) -> List[MCQ]:
           B) Option
           C) Option
           D) Option
+    If allow_no_answer is True, questions without an ANSWER block are included (ungraded).
+
+    Runs both line-based and token-based parsers and merges results so that questions
+    found by either parser are included (reduces missing MCQs when layout varies).
     """
     if start > end:
         raise McqParsingError(f"Invalid range: start ({start}) > end ({end}).")
 
     text = _normalize_ws(text)
 
-    mcqs = _parse_mcqs_line_based(text, start, end)
-    if mcqs:
-        return mcqs
+    line_based: List[MCQ] = []
+    try:
+        line_based = _parse_mcqs_line_based(text, start, end, allow_no_answer=allow_no_answer)
+    except Exception:
+        pass
 
-    mcqs = _parse_mcqs_token_based(text, start, end)
-    if not mcqs:
+    token_based: List[MCQ] = []
+    try:
+        token_based = _parse_mcqs_token_based(text, start, end, allow_no_answer=allow_no_answer)
+    except Exception:
+        pass
+
+    merged = _merge_mcq_lists(line_based, token_based)
+    # Drop MCQs that look like misparsed list/table content (e.g. ABG causes with A) B) labels)
+    filtered = [m for m in merged if _is_plausible_mcq(m)]
+    if not filtered:
         raise McqParsingError(
             "No MCQs parsed from the page using the expected format. "
             "Check that the page and formatting match the assumptions."
         )
-    return mcqs
+    return filtered
 
 
-def _parse_mcqs_line_based(text: str, start: int, end: int) -> List[MCQ]:
+def _parse_mcqs_line_based(
+    text: str, start: int, end: int, *, allow_no_answer: bool = False
+) -> List[MCQ]:
     lines = [ln.rstrip() for ln in text.splitlines()]
     mcqs: List[MCQ] = []
 
@@ -165,8 +230,8 @@ def _parse_mcqs_line_based(text: str, start: int, end: int) -> List[MCQ]:
             expl = "\n".join(expl_lines).strip()
 
         if start <= current_num <= end:
-            # Only include questions that look like real MCQs (options + answer key)
-            if q_text and len(current_opts) >= 1 and answer:
+            # Include if we have question + options, and (answer key or allow_no_answer)
+            if q_text and len(current_opts) >= 1 and (answer or allow_no_answer):
                 mcqs.append(
                     MCQ(
                         number=current_num,
@@ -266,7 +331,9 @@ def _parse_mcqs_line_based(text: str, start: int, end: int) -> List[MCQ]:
     return mcqs
 
 
-def _parse_mcqs_token_based(text: str, start: int, end: int) -> List[MCQ]:
+def _parse_mcqs_token_based(
+    text: str, start: int, end: int, *, allow_no_answer: bool = False
+) -> List[MCQ]:
     """
     More robust parser for PDFs where line breaks are missing or columns are merged.
     It finds question starts like "21. " anywhere in the text and then extracts
@@ -331,7 +398,7 @@ def _parse_mcqs_token_based(text: str, start: int, end: int) -> List[MCQ]:
             if opt_text:
                 options.append(opt_text)
 
-        if options and answer_text:
+        if options and (answer_text or allow_no_answer):
             mcqs.append(
                 MCQ(
                     number=q_num,
@@ -345,6 +412,20 @@ def _parse_mcqs_token_based(text: str, start: int, end: int) -> List[MCQ]:
     return mcqs
 
 
+def get_question_start_positions(text: str) -> Dict[int, int]:
+    """
+    Find the first occurrence (start position) of each question number in text.
+    Used to locate gaps between parsed questions so we can re-parse only the missing segment.
+    Returns dict mapping question_number -> position (first occurrence of "N." or "Q N" etc).
+    """
+    positions: Dict[int, int] = {}
+    for m in _Q_START_ANYWHERE_RE.finditer(text):
+        num = int(m.group(1))
+        if num not in positions:
+            positions[num] = m.start()
+    return positions
+
+
 def find_pages_containing_question(
     pdf_path: str,
     question_number: int,
@@ -352,10 +433,15 @@ def find_pages_containing_question(
     max_hits: int = 10,
     coarse_step: int = 25,
     require_answer_marker: bool = False,
+    page_min: Optional[int] = None,
+    page_max: Optional[int] = None,
 ) -> List[int]:
     """
     Returns 1-indexed page numbers that appear to contain the given question number.
     Useful when the human page number doesn't match the actual PDF page index.
+
+    If page_min/page_max are set, only pages in [page_min, page_max] are considered,
+    so content is taken from the same section of the PDF (e.g. around the user-given page).
     """
     num = str(question_number)
     pat = re.compile(
@@ -366,11 +452,15 @@ def find_pages_containing_question(
     try:
         with pdfplumber.open(pdf_path) as pdf:
             total = len(pdf.pages)
+            lo = 1 if page_min is None else max(1, page_min)
+            hi = total if page_max is None else min(total, page_max)
+            if lo > hi:
+                return hits
             step = max(1, int(coarse_step))
 
-            # Coarse scan: check every Nth page to find regions.
+            # Coarse scan: check every Nth page in [lo, hi] to find regions.
             coarse_pages: List[int] = []
-            for p in range(1, total + 1, step):
+            for p in range(lo, hi + 1, step):
                 t = pdf.pages[p - 1].extract_text() or ""
                 if require_answer_marker and not re.search(
                     r"\bANSWER\b|\bEXPLANATION\b", t, flags=re.IGNORECASE
@@ -384,7 +474,7 @@ def find_pages_containing_question(
             # Refine: scan within each coarse window to find exact pages.
             for p in coarse_pages:
                 start_p = p
-                end_p = min(total, p + step - 1)
+                end_p = min(hi, p + step - 1)
                 for idx in range(start_p, end_p + 1):
                     t = pdf.pages[idx - 1].extract_text() or ""
                     if require_answer_marker and not re.search(
