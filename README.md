@@ -59,37 +59,48 @@ On first run, your browser will open to complete OAuth login. A `token.json` fil
 
 ## Usage
 
-Basic: create a Google Form quiz from a PDF page and question range:
+Basic: create a Google Form quiz from a PDF start/end page range and question range:
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --start 21 --end 30 --title "Quiz 1"
+python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1"
 ```
 
-Example (your PDF style): start at page 9 and generate questions 1–6:
+Example (your PDF style): read pages 9-11 and generate questions 1-6:
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 9 --start 1 --end 6 --title "Quiz 1-6"
+python3 generate_quiz.py --pdf mcqs.pdf --page 9 --end-page 11 --start 1 --end 6 --title "Quiz 1-6"
 ```
 
 Optional: also create a Classroom assignment in a course:
 
 ```bash
 python3 generate_quiz.py \
-  --pdf mcqs.pdf --page 5 --start 21 --end 30 --title "Quiz 1" \
+  --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" \
   --classroom_id "123456789012"
 ```
 
 Preview parsed MCQs without creating a form or calling Google APIs:
 
 ```bash
-python3 generate_quiz.py --pdf mcqs.pdf --page 5 --start 21 --end 30 --title "Quiz 1" --preview
+python3 generate_quiz.py --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" --preview
 ```
+
+If some questions are still missing after automatic parsing, the CLI now asks for manual page hints before creating the form. Example input:
+
+```text
+4=1090, 7=1092
+```
+
+This means "question 4 is on page 1090" and "question 7 is on page 1092". The tool re-parses those pages (and nearby spillover) to recover missing MCQs.
+
+Use `--page` as the start page and `--end-page` as the end page (inclusive).
 
 **Config file:** You can put options in a YAML file and pass `--config quiz_config.yaml`. CLI arguments override config values. Example `quiz_config.yaml`:
 
 ```yaml
 pdf: mcqs.pdf
 page: 5
+end_page: 8
 start: 21
 end: 30
 title: "Quiz 1"
@@ -111,7 +122,7 @@ You can also set custom OAuth file paths:
 
 ```bash
 python3 generate_quiz.py \
-  --pdf mcqs.pdf --page 5 --start 21 --end 30 --title "Quiz 1" \
+  --pdf mcqs.pdf --page 5 --end-page 8 --start 21 --end 30 --title "Quiz 1" \
   --credentials path/to/credentials.json --token path/to/token.json
 ```
 
@@ -157,6 +168,8 @@ On success:
 
 - `Form created successfully`
 - `Form URL: <link>`
+
+If questions remain missing and you do not confirm continuation, form creation is aborted to avoid unreliable/incomplete quizzes.
 
 If Classroom upload is used:
 

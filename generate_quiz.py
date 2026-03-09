@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -154,6 +155,131 @@ def _fill_missing_mcqs_by_search(
             if n in collected:
                 break
     return [collected[k] for k in sorted(collected.keys())]
+
+
+def _parse_missing_page_input(raw: str, missing: list[int]) -> dict[int, int]:
+    """
+    Parse user input mappings like "4=1090, 7:1092" into {4: 1090, 7: 1092}.
+    Only accepts questions that are currently missing and positive page numbers.
+    """
+    mappings: dict[int, int] = {}
+    if not raw.strip():
+        return mappings
+
+    pattern = re.compile(r"(\d+)\s*[:=]\s*(\d+)")
+    missing_set = set(missing)
+    for q_str, p_str in pattern.findall(raw):
+        q_num = int(q_str)
+        p_num = int(p_str)
+        if q_num in missing_set and p_num >= 1:
+            mappings[q_num] = p_num
+    return mappings
+
+
+def _prompt_user_for_missing_pages(missing: list[int]) -> dict[int, int]:
+    """
+    Ask user to provide page mappings for missing questions.
+    Input format:
+      4=1090, 7=1092
+    """
+    if not missing:
+        return {}
+
+    print(
+        f"Missing questions: {missing}",
+        file=sys.stderr,
+    )
+    print(
+        "Enter page mappings as question=page (e.g. 4=1090, 7=1092), or press Enter to skip:",
+        file=sys.stderr,
+    )
+    try:
+        raw = input().strip()
+    except EOFError:
+        return {}
+    return _parse_missing_page_input(raw, missing)
+
+
+def _fill_missing_from_user_pages(
+    *,
+    pdf_path: str,
+    start: int,
+    end: int,
+    current: list,
+    question_pages: dict[int, int],
+    allow_no_answer: bool = False,
+) -> list:
+    """
+    Fill missing MCQs using user-provided page numbers.
+    For each provided page, parse that page; if it fails, parse page+1 as spillover.
+    """
+    collected = {m.number: m for m in current}
+    if not question_pages:
+        return [collected[k] for k in sorted(collected.keys())]
+
+    missing = [n for n in range(start, end + 1) if n not in collected]
+    if not missing:
+        return [collected[k] for k in sorted(collected.keys())]
+    missing_set = set(missing)
+
+    # Parse each unique user-provided page once to recover the mapped question and nearby missing ones.
+    for p in sorted(set(question_pages.values())):
+        try:
+            text = extract_text_from_pdf_page(pdf_path, p)
+        except PdfExtractionError:
+            continue
+
+        parsed: list = []
+        try:
+            parsed = parse_mcqs_from_text(text, start, end, allow_no_answer=allow_no_answer)
+        except McqParsingError:
+            try:
+                # Some questions spill to next page; try a two-page window.
+                nxt = extract_text_from_pdf_page(pdf_path, p + 1)
+                parsed = parse_mcqs_from_text(
+                    "\n".join([text, nxt]), start, end, allow_no_answer=allow_no_answer
+                )
+            except (PdfExtractionError, McqParsingError):
+                parsed = []
+
+        for m in parsed:
+            if m.number in missing_set:
+                collected[m.number] = m
+
+    # If a mapped question is still missing, try targeted parse for that exact number.
+    for q_num, p in question_pages.items():
+        if q_num in collected:
+            continue
+        try:
+            text = extract_text_from_pdf_page(pdf_path, p)
+            parsed = parse_mcqs_from_text(text, q_num, q_num, allow_no_answer=allow_no_answer)
+            for m in parsed:
+                if m.number == q_num:
+                    collected[q_num] = m
+        except (PdfExtractionError, McqParsingError):
+            continue
+
+    return [collected[k] for k in sorted(collected.keys())]
+
+
+def _confirm_continue_with_missing(missing: list[int]) -> bool:
+    """
+    Ask user whether to continue form creation with missing questions.
+    Default is "no".
+    """
+    print(
+        f"Still missing questions: {missing}",
+        file=sys.stderr,
+    )
+    print(
+        "Continue creating form with missing questions? [y/N]:",
+        file=sys.stderr,
+    )
+    try:
+        ans = input().strip().lower()
+    except EOFError:
+        return False
+    return ans in ("y", "yes")
 
 
 def _load_config(path: str) -> dict:
@@ -437,6 +563,37 @@ def main(argv: list[str] | None = None) -> int:
                 f"(expected {expected_count}). Parsed numbers: {parsed_nums}",
                 file=sys.stderr,
             )
+            missing = [n for n in range(args.start, args.end + 1) if n not in set(parsed_nums)]
+
+            if missing and sys.stdin.isatty():
+                if verbose:
+                    print("Interactive recovery: please provide page numbers for missing questions.", file=sys.stderr)
+                mappings = _prompt_user_for_missing_pages(missing)
+                if mappings:
+                    mcqs = _fill_missing_from_user_pages(
+                        pdf_path=args.pdf,
+                        start=args.start,
+                        end=args.end,
+                        current=mcqs,
+                        question_pages=mappings,
+                        allow_no_answer=allow_no_answer,
+                    )
+
+            # Recompute missing after interactive recovery.
+            parsed_nums = [m.number for m in mcqs]
+            missing = [n for n in range(args.start, args.end + 1) if n not in set(parsed_nums)]
+            if missing:
+                if sys.stdin.isatty():
+                    if not _confirm_continue_with_missing(missing):
+                        print("Aborted: form not created because some questions are still missing.", file=sys.stderr)
+                        return 2
+                else:
+                    print(
+                        "Error: missing questions remain and no interactive input is available. "
+                        "Run with --preview/-v and provide correct page mappings.",
+                        file=sys.stderr,
+                    )
+                    return 2
         mcq_dicts = [m.to_dict() for m in mcqs]
 
         output_path = getattr(args, "output", None)
